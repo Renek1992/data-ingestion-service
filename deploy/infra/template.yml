@@ -1,0 +1,119 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Applications for data ingestions into data warehouse
+
+
+
+
+Parameters:
+    Env:
+      Type: String
+      Description: Environment variable
+      Default: Dev
+
+
+Conditions:
+    isProd: !Equals [ !Ref Env, prod]
+
+
+Globals:
+  Function:
+    Timeout: 30
+    Layers:
+      - !Ref LambdaDependenciesLayer
+      - !Ref LambdaSharedModulesLayer
+      - !Ref LambdaConfigLayer
+    
+
+
+Resources:
+  LambdaExecutionRole:
+     Type: AWS::IAM::Role
+     Properties:
+          AssumeRolePolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Action:
+                  - sts:AssumeRole
+                Effect: Allow
+                Principal: 
+                  Service: 
+                    - lambda.amazonaws.com
+          ManagedPolicyArns:
+            - arn:aws:iam::aws:policy/AmazonEventBridgeFullAccess
+            - arn:aws:iam::aws:policy/SecretsManagerReadWrite
+            - arn:aws:iam::aws:policy/AmazonS3FullAccess
+            - arn:aws:iam::aws:policy/CloudWatchLogsFullAccess
+          Path: /
+
+  
+  SpotlightRecurlyLambdaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+        CodeUri: ../../src/recurly_spotlight_exporter/
+        Handler: app.lambda_handler
+        MemorySize: 512
+        Environment:
+          Variables:
+               SECRET_ID: !Sub ${Env}/spotlight-recurly-export
+               ENVIRONMENT: !Ref Env
+               BUCKET_NAME: !If [ isProd , prd-bi-airflow-recurly  , !Ref SpotlightRecurlyS3Bucket ] 
+        Runtime: python3.11
+        Role: !GetAtt LambdaExecutionRole.Arn
+
+
+  LambdaDependenciesLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties: 
+      Description: Lambda layer for dependencies
+      ContentUri: ../layers/python_deps.zip
+      CompatibleRuntimes:
+           - python3.11
+
+
+  LambdaSharedModulesLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      Description: Lambda layer for shared modules
+      ContentUri: ../layers/shared.zip
+
+
+  LambdaConfigLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      Description: lambda layer for config
+      ContentUri: ../layers/config.zip
+
+
+  SpotlightRecurlySecretsManagerStore:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+         Name: !Sub ${Env}/spotlight-recurly-export
+         SecretString: '{"LOG_LEVEL":"INFO","APP_NAME":"recurly_spotlight_exporter","API_ENDPOINT":"https://v3.eu.recurly.com/export_dates/","API_KEY":"","SLACK_TOKEN":""}'
+
+
+  SpotlightRecurlyS3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ${Env}-recurly-spotlight-exports-${AWS::AccountId}-${AWS::Region}
+      
+
+  ScheduledRuleDaily:
+    Type: AWS::Events::Rule
+    Properties:
+      ScheduleExpression: "cron(0 4 * * ? *)"
+      State: DISABLED
+      Targets:
+           - Id: RecurlyLambdaInvoker
+             Arn: !GetAtt SpotlightRecurlyLambdaFunction.Arn
+
+
+  RecurlyLambdaInvokationPerm:
+    Type:  AWS::Lambda::Permission
+    Properties:
+         Action: lambda:InvokeFunction
+         FunctionName: !GetAtt SpotlightRecurlyLambdaFunction.Arn
+         Principal: events.amazonaws.com
+         SourceArn: !GetAtt ScheduledRuleDaily.Arn
+
+  

@@ -1,0 +1,92 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Applications for data ingestions into data warehouse
+Parameters:
+  Env:
+    Type: String
+    Description: Environment variable
+    Default: Dev
+Globals:
+  Function:
+    Timeout: 30
+    Layers:
+    - Ref: LambdaDependenciesLayer
+    - Ref: LambdaSharedModulesLayer
+    - Ref: LambdaConfigLayer
+Resources:
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Action:
+          - sts:AssumeRole
+          Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/AmazonEventBridgeFullAccess
+      - arn:aws:iam::aws:policy/SecretsManagerReadWrite
+      Path: /
+    Metadata:
+      SamResourceId: LambdaExecutionRole
+  SpotlightRecurlyLambdaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: s3://aws-sam-cli-managed-default-samclisourcebucket-lup8bq5o3ovc/3259dc6d97fd5c9938746ade098b4f03
+      Handler: app.lambda_handler
+      Environment:
+        Variables:
+          SECRET_ID:
+            Ref: SpotlightRecurlySecretsManagerStore
+          ENVIRONMENT:
+            Ref: Env
+          BUCKET_NAME:
+            Ref: SpotlightRecurlyS3Bucket
+      Runtime: python3.12
+      Role:
+        Fn::GetAtt:
+        - LambdaExecutionRole
+        - Arn
+    Metadata:
+      SamResourceId: SpotlightRecurlyLambdaFunction
+  LambdaDependenciesLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      Description: Lambda layer for dependencies
+      ContentUri: s3://aws-sam-cli-managed-default-samclisourcebucket-lup8bq5o3ovc/e1c39e1b42a4398476fb9fdf043316cb
+      CompatibleRuntimes:
+      - python3.12
+    Metadata:
+      SamResourceId: LambdaDependenciesLayer
+  LambdaSharedModulesLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      Description: Lambda layer for shared modules
+      ContentUri: s3://aws-sam-cli-managed-default-samclisourcebucket-lup8bq5o3ovc/443537ea49f2c91ab2c64a5e3157291f
+    Metadata:
+      SamResourceId: LambdaSharedModulesLayer
+  LambdaConfigLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      Description: lambda layer for config
+      ContentUri: s3://aws-sam-cli-managed-default-samclisourcebucket-lup8bq5o3ovc/50d5e6c786cd0911efba022e7249617b
+    Metadata:
+      SamResourceId: LambdaConfigLayer
+  SpotlightRecurlySecretsManagerStore:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name:
+        Fn::Sub: ${Env}/spotlight-recurly-export
+      SecretString: '{"LOG_LEVEL":"INFO","APP_NAME":"recurly_spotlight_exporter","API_ENDPOINT":"https://v3.eu.recurly.com/export_dates/","API_KEY":""}'
+    Metadata:
+      SamResourceId: SpotlightRecurlySecretsManagerStore
+  SpotlightRecurlyS3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName:
+        Fn::Sub: ${Env}-recurly-spotlight-exports-${AWS::AccountId}-${AWS::Region}
+    Metadata:
+      SamResourceId: SpotlightRecurlyS3Bucket

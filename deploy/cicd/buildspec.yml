@@ -1,0 +1,48 @@
+version: 0.2
+
+phases: 
+  install:
+    commands:
+      - sudo apt update
+      - pip3 install pipenv
+      - pipenv install && pipenv requirements > requirements.txt
+
+  pre_build:
+    commands:
+      - sam --version
+      - python3 --version
+
+  build:
+    commands:
+      # Build LambdaDependenciesLayer
+      - mkdir -p deploy/layers/python_deps/python
+      - pip install -r ./requirements.txt -t deploy/layers/python_deps/python
+      - cd deploy/layers/python_deps
+      - zip -r python_deps.zip .
+      - mv python_deps.zip ../
+      - cd ../../../
+
+      # Build LambdaSharedModulesLayer 
+      - mkdir -p deploy/layers/shared/python
+      - cp -r ./shared deploy/layers/shared/python
+      - cd deploy/layers/shared
+      - zip -r shared.zip .
+      - mv shared.zip ../
+      - cd ../../../
+
+      # Build LambdaConfigLayer
+      - mkdir -p deploy/layers/config/python/src
+      - cp -r -p ./src/config.py deploy/layers/config/python/src
+      - cd deploy/layers/config
+      - zip -r config.zip .
+      - mv config.zip ../
+      - cd ../../../
+
+      # Build & Package
+      - sam build --template-file deploy/infra/template.yml
+      - sam package --resolve-s3 --output-template-file deploy/infra/packaged.yml
+
+
+artifacts:
+  files: 
+    - deploy/infra/packaged.yml

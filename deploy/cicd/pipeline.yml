@@ -1,0 +1,318 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: Sample CloudFormation template with YAML - CodePipeline
+
+Parameters:
+  Env:
+    Description: Environment variable
+    Type: String
+
+  ProjectName:
+    Description: Name of the project
+    Type: String
+    Default: data-dw-ingestions
+
+  GitHubOwner:
+    Description: Owner of the Github Repo
+    Type: String
+    Default: castingnetworks
+
+  GitHubBranch:
+    Description: Github Branch
+    Type: String
+
+
+
+Resources:
+  CodePipelineProject:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Sub ${Env}-${ProjectName}-Pipeline
+      RoleArn: !GetAtt CodePipelineServiceRole.Arn
+      Stages:
+        - Name: SourceStage
+          Actions:
+            - Name: SourceAction
+              ActionTypeId:
+                Category: Source
+                Owner: ThirdParty
+                Provider: GitHub
+                Version: "1"
+              OutputArtifacts:
+                - Name: SourceOutput
+              Configuration:
+                Owner: !Ref GitHubOwner
+                Repo: !Ref ProjectName
+                Branch: !Ref GitHubBranch
+                OAuthToken: "{{resolve:secretsmanager:GitHubSecret:SecretString:oauth_token}}"
+              RunOrder: 1
+        - Name: BuildStage
+          Actions:
+            - Name: BuildAction
+              InputArtifacts:
+                - Name: SourceOutput
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              OutputArtifacts:
+                - Name: BuildArtifact
+              Configuration:
+                ProjectName: !Ref CodeBuildBuildContainer
+              RunOrder: 1
+        - Name: TestStage
+          Actions:
+            - Name: UnitTestAction
+              InputArtifacts:
+                - Name:  SourceOutput
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: "1"
+                Provider: CodeBuild
+              OutputArtifacts:
+                - Name: TestArtifact
+              Configuration:
+                ProjectName: !Ref CodeBuildTestContainer
+              RunOrder: 1
+        - Name: DeployStage
+          Actions:
+            - Name: CreateChangeSetAction
+              InputArtifacts:
+                - Name: BuildArtifact
+              ActionTypeId: 
+                Category: Deploy
+                Owner: AWS
+                Version: "1"
+                Provider: CloudFormation
+              Configuration:
+                ActionMode: CHANGE_SET_REPLACE
+                Capabilities: CAPABILITY_IAM,CAPABILITY_AUTO_EXPAND,CAPABILITY_NAMED_IAM
+                RoleArn: !GetAtt CloudformationAssumeRole.Arn
+                ChangeSetName: update-stack 
+                ParameterOverrides: !Sub '{"Env": "${Env}"}'
+                StackName: !Sub '${Env}-${ProjectName}-app'
+                TemplatePath: BuildArtifact::deploy/infra/packaged.yml
+              RunOrder: 1
+            - Name: ExecuteChangeSetAction
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: "1"
+                Provider: CloudFormation
+              Configuration:
+                ActionMode: CHANGE_SET_EXECUTE
+                ChangeSetName: update-stack
+                RoleArn: !GetAtt CloudformationAssumeRole.Arn
+                StackName: !Sub '${Env}-${ProjectName}-app'
+              RunOrder: 2 
+      ArtifactStore:
+        Location: !Ref ArtifactS3Bucket
+        Type: S3
+
+
+  CloudformationAssumeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - "cloudformation.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Path: "/"
+
+
+  CloudFormationAssumeRolePolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub "${ProjectName}-CloudFormationAssumeRolePolicy"
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Action:
+              - "*"
+            Resource: "*"
+      Roles:
+        - Ref: "CloudformationAssumeRole"
+
+
+  CodePipelineServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: /
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codepipeline.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub ${ProjectName}-codepipeline-base-policy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Action:
+                  - elasticbeanstalk:*
+                  - ec2:*
+                  - elasticloadbalancing:*
+                  - autoscaling:*
+                  - cloudwatch:*
+                  - s3:*
+                  - sns:*
+                  - cloudformation:*
+                  - rds:*
+                  - sqs:*
+                  - ecs:*
+                  - ssm:*
+                  - secretsmanager:*
+                Resource: "*"
+                Effect: Allow
+              - Action:
+                  - codecommit:*
+                Resource: "*"
+                Effect: Allow
+              - Action:
+                  - codedeploy:*
+                Resource: "*"
+                Effect: Allow
+              - Action:
+                  - codebuild:*
+                Resource: "*"
+                Effect: Allow
+              - Action:
+                  - iam:PassRole
+                Resource: "*"
+                Effect: Allow
+                Condition:
+                  StringEqualsIfExists:
+                    iam:PassedToService:
+                      - cloudformation.amazonaws.com
+                      - elasticbeanstalk.amazonaws.com
+                      - ec2.amazonaws.com
+                      - ecs-tasks.amazonaws.com
+              - Action:
+                  - lambda:*
+                Resource: "*"
+                Effect: Allow
+              - Action:
+                  - opsworks:*
+                Resource: "*"
+                Effect: Allow
+              - Action:
+                  - devicefarm:*
+                Resource: "*"
+                Effect: Allow
+              - Action:
+                  - servicecatalog:*
+                Resource: "*"
+                Effect: Allow
+              - Action:
+                  - ecr:DescribeImages
+                Resource: "*"
+                Effect: Allow
+
+
+  GithubCodePipelineWebhook:
+    Type: AWS::CodePipeline::Webhook
+    Properties:
+      Name: GithubCodePipelineWebhook
+      Authentication: GITHUB_HMAC
+      AuthenticationConfiguration:
+        SecretToken: "{{resolve:secretsmanager:GitHubSecret:SecretString:oauth_token}}"    # Ensure oauth token is SSO registered with org
+      Filters:
+        - JsonPath: "$.ref"
+          MatchEquals: refs/heads/{Branch}
+      TargetPipeline: !Ref CodePipelineProject
+      TargetAction: SourceAction
+      TargetPipelineVersion: !GetAtt CodePipelineProject.Version
+      RegisterWithThirdParty: True
+
+
+  CodeBuildBuildContainer:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub ${Env}-${ProjectName}-BuildProject
+      Source:
+        Type: CODEPIPELINE
+        GitCloneDepth: 1
+        BuildSpec: deploy/cicd/buildspec.yml
+      Environment:
+        PrivilegedMode: True
+        Type: LINUX_CONTAINER
+        Image: aws/codebuild/standard:7.0
+        ComputeType: BUILD_GENERAL1_SMALL
+      ServiceRole: !Ref CodeBuildServiceRole
+      Artifacts:
+        Type: CODEPIPELINE
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+          GroupName: !Sub ${Env}-${ProjectName}-CloudWatchLogs-BuildLogGroup-Name
+
+
+  CodeBuildTestContainer:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub ${Env}-${ProjectName}-TestProject
+      Source:
+        Type: CODEPIPELINE
+        GitCloneDepth: 1
+        BuildSpec: deploy/cicd/testspec.yml
+      Environment:
+        PrivilegedMode: True
+        Type: LINUX_CONTAINER
+        Image: aws/codebuild/standard:7.0
+        ComputeType: BUILD_GENERAL1_SMALL
+      ServiceRole: !Ref CodeBuildServiceRole
+      Artifacts:
+        Type: CODEPIPELINE
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+          GroupName: !Sub ${Env}-${ProjectName}-CloudWatchLogs-TestLogGroup-Name
+
+
+  CodeBuildServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: /
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub ${ProjectName}-codebuild-base-policy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Action:
+                  - logs:*
+                  - ec2:*
+                  - codebuild:*
+                  - cloudwatch:*
+                  - s3:*
+                  - sns:*
+                  - cloudformation:*
+                  - ssm:*
+                  - secretsmanager:*
+                Resource: "*"
+                Effect: Allow
+
+
+  ArtifactS3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ${Env}-${ProjectName}-cicd-${AWS::AccountId}-${AWS::Region}

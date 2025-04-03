@@ -1,0 +1,25 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+pydantic = "*"
+boto3 = "*"
+botocore = "*"
+boto3-stubs = "*"
+mypy-boto3-secretsmanager = "*"
+mypy-boto3-s3 = "*"
+requests = "*"
+retry = "*"
+pydantic-core = "*"
+slack-sdk = "*"
+
+[dev-packages]
+pytest = "*"
+pytest-cov = "*"
+ruff = "*"
+pytest-describe = "*"
+
+[requires]
+python_version = "3.11"
