@@ -1,5 +1,3 @@
-<img src="docs/images/ts_logo.png" alt="Diagram 1" width="80">
-
 
 # data-dw-ingestions
 Repo for an application responsible in ingesting data into the Data Warehouse Snowflake. External data sources are being tapped into utilising available REST APIs to either extract data objects or reports. <br> 
